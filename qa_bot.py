@@ -4,6 +4,16 @@ import config
 import re
 from knowledge_base import TOPICS, TOPIC_ORDER, SYNONYMS
 import security
+import logging
+import os
+
+# Базовое логирование в stdout (Railway/Heroku и т.п. подхватывают автоматически)
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+telebot.logger.setLevel(logging.INFO)
 
 # Инициализация бота
 bot = telebot.TeleBot(config.BOT_TOKEN)
@@ -11,6 +21,23 @@ bot = telebot.TeleBot(config.BOT_TOKEN)
 # Словарь для хранения состояния пользователей
 # Формат: {user_id: {"current_topic": "start", "current_question_index": 0}}
 user_sessions = {}
+
+def safe_send_message(chat_id, text, parse_mode="Markdown", **kwargs):
+    """
+    Надёжная отправка сообщений:
+    - сначала пробуем отправить с Markdown (как задумано в базе знаний)
+    - если Telegram отвергает сообщение из-за разметки, логируем и отправляем plain-text
+    """
+    try:
+        return bot.send_message(chat_id, text, parse_mode=parse_mode, **kwargs)
+    except Exception as e:
+        # Частый кейс: "Bad Request: can't parse entities"
+        logger.warning(
+            "send_message failed (parse_mode=%s). Retrying without parse_mode. error=%s",
+            parse_mode,
+            f"{type(e).__name__}: {e}",
+        )
+        return bot.send_message(chat_id, text, **kwargs)
 
 def get_user_session(user_id):
     """Получаем или создаем сессию для пользователя"""
@@ -147,14 +174,14 @@ def show_question(user_id, chat_id):
     # Отправляем вопрос (для стартовой темы не показываем название)
     if topic_key == "start" and "is_welcome" in question_data:
         # Для стартового сообщения показываем только вопрос без названия темы
-        bot.send_message(
+        safe_send_message(
             chat_id,
             question_data['question'],
             parse_mode="Markdown"
         )
     else:
         # Для остальных тем показываем название темы
-        bot.send_message(
+        safe_send_message(
             chat_id,
             f"**{topic['name']}**\n\n*Вопрос:* {question_data['question']}",
             parse_mode="Markdown"
@@ -203,7 +230,7 @@ def show_question(user_id, chat_id):
         elif has_final:
             answer_text += "\n\n---\n🎉 *Поздравляю!* Вы завершили базовый курс!"
 
-    bot.send_message(
+    safe_send_message(
         chat_id,
         answer_text,
         reply_markup=markup,
@@ -251,7 +278,7 @@ def send_help(message):
 © 2025 QA Ментор создан Михаилом Губенко. Все права защищены.
 Лицензия: GPL-3.0
     """
-    bot.send_message(message.chat.id, help_text, parse_mode="Markdown")
+    safe_send_message(message.chat.id, help_text, parse_mode="Markdown")
 
 @bot.message_handler(commands=['license'])
 def send_license(message):
@@ -274,7 +301,7 @@ https://github.com/mihaelgubenko/QA---mentor
 
 Полный текст лицензии: /help
     """
-    bot.send_message(message.chat.id, license_text, parse_mode="Markdown")
+    safe_send_message(message.chat.id, license_text, parse_mode="Markdown")
 
 @bot.message_handler(commands=['topics'])
 def send_topics(message):
@@ -291,7 +318,7 @@ def send_topics(message):
         topics_text += "\n"
     
     topics_text += "Используй кнопки навигации или /start для начала обучения!"
-    bot.send_message(message.chat.id, topics_text, parse_mode="Markdown")
+    safe_send_message(message.chat.id, topics_text, parse_mode="Markdown")
 
 @bot.message_handler(commands=['search'])
 def handle_search(message):
@@ -300,7 +327,7 @@ def handle_search(message):
     raw_query = message.text.replace('/search', '').strip()
     
     if not raw_query:
-        bot.send_message(
+        safe_send_message(
             message.chat.id,
             "❌ Укажи запрос для поиска!\n\n"
             "*Пример:* /search что такое баг",
@@ -317,7 +344,7 @@ def handle_search(message):
         )
         
         if not is_valid:
-            bot.send_message(
+            safe_send_message(
                 message.chat.id,
                 f"⚠️ {error_msg}\n\n"
                 "Пожалуйста, переформулируй запрос.",
@@ -335,7 +362,7 @@ def handle_search(message):
     if not results:
         # Безопасно экранируем запрос для отображения
         safe_query = security.escape_markdown(query)
-        bot.send_message(
+        safe_send_message(
             message.chat.id,
             f"😔 По запросу '*{safe_query}*' ничего не найдено.\n\n"
             "Попробуй:\n"
@@ -367,7 +394,7 @@ def handle_search(message):
     if len(response) > 4000:
         response = response[:4000] + "\n\n... (сообщение обрезано)"
     
-    bot.send_message(message.chat.id, response, parse_mode="Markdown")
+    safe_send_message(message.chat.id, response, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: message.text == "Старт 🚀")
 def start_over(message):
@@ -395,7 +422,7 @@ def go_back(message):
         session["current_question_index"] = 0
         show_question(user_id, message.chat.id)
     else:
-        bot.send_message(message.chat.id, "Вы уже в начале обучения!")
+        safe_send_message(message.chat.id, "Вы уже в начале обучения!")
 
 @bot.message_handler(func=lambda message: message.text == "Предыдущий вопрос ↩️")
 def prev_question(message):
@@ -406,7 +433,7 @@ def prev_question(message):
         session["current_question_index"] -= 1
         show_question(user_id, message.chat.id)
     else:
-        bot.send_message(message.chat.id, "Это первый вопрос в теме.")
+        safe_send_message(message.chat.id, "Это первый вопрос в теме.")
 
 @bot.message_handler(func=lambda message: message.text == "Следующая тема ➡️")
 def next_topic(message):
@@ -420,12 +447,12 @@ def next_topic(message):
         session["current_question_index"] = 0
         show_question(user_id, message.chat.id)
     else:
-        bot.send_message(message.chat.id, "Поздравляю! Вы завершили базовый курс! 🎉")
+        safe_send_message(message.chat.id, "Поздравляю! Вы завершили базовый курс! 🎉")
 
 @bot.message_handler(func=lambda message: message.text == "Задать вопрос ❓")
 def ask_question_prompt(message):
     """Подсказка для задавания вопроса"""
-    bot.send_message(
+    safe_send_message(
         message.chat.id,
         "💬 *Задай свой вопрос о тестировании!*\n\n"
         "*Примеры вопросов:*\n"
@@ -443,6 +470,9 @@ def ask_question_prompt(message):
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
     """Обработчик текстовых сообщений (для произвольных вопросов)"""
+    # Telegram может прислать апдейт без текста (стикер/фото/голос и т.д.)
+    if not getattr(message, "text", None):
+        return
     user_input = message.text.lower()
 
     # Если пользователь просто нажал на кнопку, она уже обработана выше
@@ -472,7 +502,7 @@ def handle_text(message):
                 session["current_question_index"] = 0
                 show_question(user_id, message.chat.id)
             else:
-                bot.send_message(message.chat.id, "Поздравляю! Вы завершили базовый курс! 🎉")
+                safe_send_message(message.chat.id, "Поздравляю! Вы завершили базовый курс! 🎉")
         else:
             # Не последний вопрос - показываем следующий вопрос в текущей теме
             session["current_question_index"] += 1
@@ -500,7 +530,7 @@ def handle_text(message):
                 session["current_question_index"] = len(prev_topic_data["content"]) - 1
                 show_question(user_id, message.chat.id)
             else:
-                bot.send_message(message.chat.id, "Вы уже в начале обучения!")
+                safe_send_message(message.chat.id, "Вы уже в начале обучения!")
         return
 
     # Валидация и очистка пользовательского ввода
@@ -513,7 +543,7 @@ def handle_text(message):
         )
         
         if not is_valid:
-            bot.send_message(
+            safe_send_message(
                 message.chat.id,
                 f"⚠️ {error_msg}\n\n"
                 "Пожалуйста, переформулируй вопрос.",
@@ -530,7 +560,7 @@ def handle_text(message):
 
     # Простые приветствия и благодарности
     if any(word in user_input for word in ["привет", "здравств", "hello", "hi"]):
-        bot.send_message(
+        safe_send_message(
             message.chat.id, 
             "Привет! 👋 Я здесь, чтобы помочь тебе с тестированием.\n\n"
             "Можешь задавать вопросы в свободной форме или использовать команды:\n"
@@ -542,7 +572,7 @@ def handle_text(message):
         return
     
     elif any(word in user_input for word in ["спасибо", "благодар"]):
-        bot.send_message(message.chat.id, "Всегда рад помочь! Удачи в обучении! 💪")
+        safe_send_message(message.chat.id, "Всегда рад помочь! Удачи в обучении! 💪")
         return
     
     # Интеллектуальный поиск по базе знаний (используем очищенный текст)
@@ -561,7 +591,7 @@ def handle_text(message):
             if len(response) > 4000:
                 response = response[:4000] + "\n\n... (сообщение обрезано, используй навигацию для полного ответа)"
             
-            bot.send_message(
+            safe_send_message(
                 message.chat.id,
                 response,
                 parse_mode="Markdown",
@@ -575,7 +605,7 @@ def handle_text(message):
                 response += f"_{result['question']}_\n\n"
             
             response += "💡 *Используй /search <запрос> для детального поиска или уточни вопрос.*"
-            bot.send_message(
+            safe_send_message(
                 message.chat.id,
                 response,
                 parse_mode="Markdown",
@@ -584,7 +614,7 @@ def handle_text(message):
     else:
         # Ничего не найдено
         if "?" in user_input or any(word in user_input for word in ["что", "как", "зачем", "почему", "когда", "где"]):
-            bot.send_message(
+            safe_send_message(
                 message.chat.id,
                 f"😔 Я не нашел точного ответа на твой вопрос.\n\n"
                 f"*Попробуй:*\n"
@@ -596,7 +626,7 @@ def handle_text(message):
                 reply_markup=create_keyboard(with_home=True)
             )
         else:
-            bot.send_message(
+            safe_send_message(
                 message.chat.id,
                 "💬 Задай вопрос о тестировании, и я найду подходящий ответ!\n\n"
                 "*Примеры:*\n"
