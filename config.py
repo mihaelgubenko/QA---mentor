@@ -11,6 +11,10 @@ load_dotenv()
 # Токен бота из переменных окружения
 BOT_TOKEN = os.getenv('BOT_TOKEN', '')
 
+# OpenAI API ключ (опционально - для fallback к AI)
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-3.5-turbo')  # или 'gpt-4'
+
 # Название бота (централизованное - измени здесь, и оно обновится везде)
 BOT_NAME = "QA Ментор"
 
@@ -36,6 +40,14 @@ SECURITY_CONFIG = {
     'enable_prompt_injection_detection': True,  # Включить обнаружение промпт-хакинга
     'enable_input_sanitization': True,  # Включить очистку входных данных
     'strict_mode': False,  # Строгий режим (более агрессивная фильтрация)
+}
+
+# Настройки для AI fallback
+AI_CONFIG = {
+    'enabled': bool(OPENAI_API_KEY),  # Включен только если есть ключ
+    'use_fallback': True,  # Использовать AI если не найдено в базе
+    'max_tokens': 500,  # Максимальная длина ответа
+    'temperature': 0.7,  # Креативность ответов
 }
 
 # Проверка наличия токена

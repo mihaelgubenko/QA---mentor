@@ -16,3 +16,12 @@
 
 BOT_TOKEN=your_bot_token_here
 
+# OpenAI API ключ (опционально - для fallback к AI, если ответ не найден в базе знаний)
+# Получить можно на https://platform.openai.com/api-keys
+# Если не указан, бот будет работать только с локальной базой знаний
+OPENAI_API_KEY=sk-your_openai_api_key_here
+
+# Модель OpenAI (опционально, по умолчанию gpt-3.5-turbo)
+# OPENAI_MODEL=gpt-3.5-turbo
+# или
+# OPENAI_MODEL=gpt-4
