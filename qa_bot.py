@@ -346,28 +346,42 @@ def handle_search(message):
         )
         return
     
-    # Формируем ответ с результатами (безопасно экранируем запрос)
-    safe_query = security.escape_markdown(query)
-    response = f"🔍 *Результаты поиска по запросу:* '{safe_query}'\n\n"
+    # Если есть очень релевантный результат - показываем только его полностью
+    best_result = results[0]
+    if best_result['score'] >= config.SEARCH_CONFIG['high_relevance_score']:
+        response = f"*{best_result['topic_name']}*\n\n"
+        response += f"*{best_result['question']}*\n\n"
+        response += best_result['answer']
+        
+        # Обрезаем, если слишком длинно
+        if len(response) > 4000:
+            response = response[:4000] + "\n\n... (сообщение обрезано)"
+        
+        bot.send_message(
+            message.chat.id,
+            response,
+            parse_mode="Markdown",
+            reply_markup=create_keyboard(with_home=True)
+        )
+        return
     
-    for i, result in enumerate(results, 1):
-        response += f"*{i}. {result['topic_name']}*\n"
-        response += f"_{result['question']}_\n\n"
-        # Показываем краткий ответ (первые 200 символов)
-        answer_preview = result['answer'][:200]
-        if len(result['answer']) > 200:
-            answer_preview += "..."
-        response += f"{answer_preview}\n\n"
-        response += "---\n\n"
-    
-    if len(results) == config.SEARCH_CONFIG['max_results']:
-        response += "💡 *Показаны первые результаты. Уточни запрос для более точного поиска.*"
-    
-    # Отправляем ответ (Telegram ограничение 4096 символов)
-    if len(response) > 4000:
-        response = response[:4000] + "\n\n... (сообщение обрезано)"
-    
-    bot.send_message(message.chat.id, response, parse_mode="Markdown")
+    # Если несколько результатов, показываем только лучший полностью
+    if len(results) > 0:
+        result = results[0]
+        response = f"*{result['topic_name']}*\n\n"
+        response += f"*{result['question']}*\n\n"
+        response += result['answer']
+        
+        # Обрезаем, если слишком длинно
+        if len(response) > 4000:
+            response = response[:4000] + "\n\n... (сообщение обрезано)"
+        
+        bot.send_message(
+            message.chat.id,
+            response,
+            parse_mode="Markdown",
+            reply_markup=create_keyboard(with_home=True)
+        )
 
 @bot.message_handler(func=lambda message: message.text == "Старт 🚀")
 def start_over(message):
@@ -549,67 +563,34 @@ def handle_text(message):
     results = search_in_knowledge_base(user_text)
     
     if results:
-        # Найден хотя бы один результат
-        if len(results) == 1:
-            # Один результат - показываем полный ответ
-            result = results[0]
-            response = f"*{result['topic_name']}*\n\n"
-            response += f"*Вопрос:* {result['question']}\n\n"
-            response += result['answer']
-            
-            # Обрезаем, если слишком длинно
-            if len(response) > 4000:
-                response = response[:4000] + "\n\n... (сообщение обрезано, используй навигацию для полного ответа)"
-            
-            bot.send_message(
-                message.chat.id,
-                response,
-                parse_mode="Markdown",
-                reply_markup=create_keyboard(with_home=True)
-            )
-        else:
-            # Несколько результатов - показываем список
-            response = f"🔍 *Найдено {len(results)} ответов:*\n\n"
-            for i, result in enumerate(results[:3], 1):  # Показываем топ-3
-                response += f"*{i}. {result['topic_name']}*\n"
-                response += f"_{result['question']}_\n\n"
-            
-            response += "💡 *Используй /search <запрос> для детального поиска или уточни вопрос.*"
-            bot.send_message(
-                message.chat.id,
-                response,
-                parse_mode="Markdown",
-                reply_markup=create_keyboard(with_home=True)
-            )
+        # Показываем лучший результат полностью
+        result = results[0]
+        response = f"*{result['topic_name']}*\n\n"
+        response += f"*{result['question']}*\n\n"
+        response += result['answer']
+        
+        # Обрезаем, если слишком длинно
+        if len(response) > 4000:
+            response = response[:4000] + "\n\n... (сообщение обрезано)"
+        
+        bot.send_message(
+            message.chat.id,
+            response,
+            parse_mode="Markdown",
+            reply_markup=create_keyboard(with_home=True)
+        )
     else:
         # Ничего не найдено
-        if "?" in user_input or any(word in user_input for word in ["что", "как", "зачем", "почему", "когда", "где"]):
-            bot.send_message(
-                message.chat.id,
-                f"😔 Я не нашел точного ответа на твой вопрос.\n\n"
-                f"*Попробуй:*\n"
-                f"• Использовать /search <запрос> для поиска\n"
-                f"• Переформулировать вопрос другими словами\n"
-                f"• Использовать /topics для просмотра всех тем\n"
-                f"• Изучать темы по порядку через навигацию",
-                parse_mode="Markdown",
-                reply_markup=create_keyboard(with_home=True)
-            )
-        else:
-            bot.send_message(
-                message.chat.id,
-                "💬 Задай вопрос о тестировании, и я найду подходящий ответ!\n\n"
-                "*Примеры:*\n"
-                "• Что такое баг?\n"
-                "• Как написать тест-кейс?\n"
-                "• Какие инструменты нужны?\n\n"
-                "Или используй команды:\n"
-                "/help — справка\n"
-                "/search <запрос> — поиск\n"
-                "/topics — список тем",
-                parse_mode="Markdown",
-                reply_markup=create_keyboard(with_home=True)
-            )
+        bot.send_message(
+            message.chat.id,
+            "😔 Я не нашел точного ответа на твой вопрос.\n\n"
+            "*Попробуй:*\n"
+            "• Переформулировать вопрос другими словами\n"
+            "• Использовать /topics для просмотра всех тем\n"
+            "• Изучать темы по порядку через навигацию",
+            parse_mode="Markdown",
+            reply_markup=create_keyboard(with_home=True)
+        )
 
 # Запуск бота
 if __name__ == "__main__":
