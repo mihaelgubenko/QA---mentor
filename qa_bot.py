@@ -1,5 +1,6 @@
 import telebot
 from telebot import types
+from telebot.apihelper import ApiTelegramException
 import config
 import re
 from knowledge_base import TOPICS, TOPIC_ORDER, SYNONYMS
@@ -12,6 +13,35 @@ bot = telebot.TeleBot(config.BOT_TOKEN)
 # Словарь для хранения состояния пользователей
 # Формат: {user_id: {"current_topic": "start", "current_question_index": 0}}
 user_sessions = {}
+
+def send_message_safe(chat_id, text, parse_mode=None, reply_markup=None):
+    """Отправляет сообщение и защищает от ошибок Markdown."""
+    try:
+        bot.send_message(
+            chat_id,
+            text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup
+        )
+        return True
+    except ApiTelegramException as exc:
+        if parse_mode == "Markdown" and "can't parse entities" in str(exc):
+            escaped_text = security.escape_markdown(text)
+            try:
+                bot.send_message(
+                    chat_id,
+                    escaped_text,
+                    parse_mode="Markdown",
+                    reply_markup=reply_markup
+                )
+            except ApiTelegramException:
+                bot.send_message(
+                    chat_id,
+                    escaped_text,
+                    reply_markup=reply_markup
+                )
+            return True
+        raise
 
 def get_user_session(user_id):
     """Получаем или создаем сессию для пользователя"""
@@ -204,7 +234,7 @@ def send_ai_response(chat_id, question):
         if len(response) > 4000:
             response = response[:4000] + "\n\n... (сообщение обрезано)"
         
-        bot.send_message(
+        send_message_safe(
             chat_id,
             response,
             parse_mode="Markdown",
@@ -264,7 +294,7 @@ def process_search_results(chat_id, query, results, is_search=False):
     # Если очень высокий score - показываем сразу
     if score >= config.SEARCH_CONFIG['high_relevance_score']:
         response = format_response_from_db(result)
-        bot.send_message(
+        send_message_safe(
             chat_id,
             response,
             parse_mode="Markdown",
@@ -285,7 +315,7 @@ def process_search_results(chat_id, query, results, is_search=False):
             if not send_ai_response(chat_id, query):
                 # AI не настроен - показываем найденный ответ (лучше чем ничего)
                 response = format_response_from_db(result)
-                bot.send_message(
+                send_message_safe(
                     chat_id,
                     response,
                     parse_mode="Markdown",
@@ -295,7 +325,7 @@ def process_search_results(chat_id, query, results, is_search=False):
         else:
             # AI подтвердил релевантность - показываем ответ из базы
             response = format_response_from_db(result)
-            bot.send_message(
+            send_message_safe(
                 chat_id,
                 response,
                 parse_mode="Markdown",
