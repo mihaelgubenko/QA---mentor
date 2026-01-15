@@ -36,12 +36,17 @@ def validate_model(model_name: str) -> str:
         return 'gpt-3.5-turbo'
     
     model = model_name.strip()
+    model_lower = model.lower()
     
-    if model.lower() not in [m.lower() for m in ALLOWED_MODELS]:
-        print(f"[WARNING] Модель '{model}' не разрешена. Используется gpt-3.5-turbo.")
-        return 'gpt-3.5-turbo'
+    # Находим соответствующую модель из списка разрешенных (с учетом регистра)
+    for allowed_model in ALLOWED_MODELS:
+        if model_lower == allowed_model.lower():
+            # Возвращаем оригинальное название из списка (нормализованное)
+            return allowed_model
     
-    return model
+    # Если модель не найдена, используем fallback
+    print(f"[WARNING] Модель '{model}' не разрешена. Используется gpt-3.5-turbo.")
+    return 'gpt-3.5-turbo'
 
 def ask_ai(question: str) -> Optional[str]:
     """

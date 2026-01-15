@@ -179,8 +179,12 @@ def format_response_from_db(result):
     response += f"*{result['question']}*\n\n"
     response += result['answer']
     
+    # Обрезаем так, чтобы итоговая длина была <= 4000 (с учетом текста обрезки)
+    truncate_text = "\n\n... (сообщение обрезано)"
+    max_length = 4000 - len(truncate_text)
+    
     if len(response) > 4000:
-        response = response[:4000] + "\n\n... (сообщение обрезано)"
+        response = response[:max_length] + truncate_text
     
     return response
 
@@ -741,7 +745,7 @@ if __name__ == "__main__":
         print()
     
     try:
-        bot.infinity_polling(none_stop=True, interval=0, timeout=20)
+        bot.infinity_polling(none_stop=True, interval=0, timeout=20, long_polling_timeout=20)
     except KeyboardInterrupt:
         print()
         print("Бот остановлен пользователем.")
@@ -757,6 +761,8 @@ if __name__ == "__main__":
             print("2. Проверьте, что на Railway запущен только один экземпляр")
             print("3. Подождите 10-20 секунд и перезапустите бота")
             print("4. Если проблема сохраняется, остановите все экземпляры и запустите заново")
+            print()
+            print("[INFO] Бот будет остановлен. Исправьте проблему и перезапустите.")
         else:
             print()
             print(f"[ОШИБКА] Бот остановлен из-за ошибки!")
