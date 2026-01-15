@@ -184,6 +184,7 @@ def format_response_from_db(result):
     max_length = 4000 - len(truncate_text)
     
     if len(response) > 4000:
+        # Обрезаем до max_length и добавляем текст обрезки
         response = response[:max_length] + truncate_text
     
     return response
@@ -312,7 +313,20 @@ def show_question(user_id, chat_id):
     topic_key = session["current_topic"]
     question_index = session["current_question_index"]
 
+    # Проверка существования темы
+    if topic_key not in TOPICS:
+        # Если тема не найдена, возвращаемся на старт
+        session["current_topic"] = "start"
+        session["current_question_index"] = 0
+        topic_key = "start"
+    
     topic = TOPICS[topic_key]
+    
+    # Проверка индекса вопроса
+    if question_index >= len(topic["content"]) or question_index < 0:
+        question_index = 0
+        session["current_question_index"] = 0
+    
     question_data = topic["content"][question_index]
 
     # Отправляем вопрос (для стартовой темы не показываем название)
@@ -517,7 +531,15 @@ def go_back(message):
     """Перейти к предыдущей теме"""
     user_id = message.from_user.id
     session = get_user_session(user_id)
-    current_index = TOPIC_ORDER.index(session["current_topic"])
+    
+    try:
+        current_index = TOPIC_ORDER.index(session["current_topic"])
+    except ValueError:
+        # Если тема не найдена в порядке, возвращаемся на старт
+        session["current_topic"] = "start"
+        session["current_question_index"] = 0
+        show_question(user_id, message.chat.id)
+        return
 
     if current_index > 0:
         session["current_topic"] = TOPIC_ORDER[current_index - 1]
@@ -542,7 +564,15 @@ def next_topic(message):
     """Перейти к следующей теме"""
     user_id = message.from_user.id
     session = get_user_session(user_id)
-    current_index = TOPIC_ORDER.index(session["current_topic"])
+    
+    try:
+        current_index = TOPIC_ORDER.index(session["current_topic"])
+    except ValueError:
+        # Если тема не найдена в порядке, возвращаемся на старт
+        session["current_topic"] = "start"
+        session["current_question_index"] = 0
+        show_question(user_id, message.chat.id)
+        return
 
     if current_index < len(TOPIC_ORDER) - 1:
         session["current_topic"] = TOPIC_ORDER[current_index + 1]
@@ -605,7 +635,14 @@ def handle_text(message):
         
         if is_last_question:
             # Последний вопрос в теме - переходим к следующей теме
-            current_index = TOPIC_ORDER.index(topic_key)
+            try:
+                current_index = TOPIC_ORDER.index(topic_key)
+            except ValueError:
+                session["current_topic"] = "start"
+                session["current_question_index"] = 0
+                show_question(user_id, message.chat.id)
+                return
+            
             if current_index < len(TOPIC_ORDER) - 1:
                 session["current_topic"] = TOPIC_ORDER[current_index + 1]
                 session["current_question_index"] = 0
@@ -631,13 +668,25 @@ def handle_text(message):
             show_question(user_id, message.chat.id)
         else:
             # Первый вопрос - переходим к предыдущей теме
-            current_index = TOPIC_ORDER.index(session["current_topic"])
+            try:
+                current_index = TOPIC_ORDER.index(session["current_topic"])
+            except ValueError:
+                session["current_topic"] = "start"
+                session["current_question_index"] = 0
+                show_question(user_id, message.chat.id)
+                return
+            
             if current_index > 0:
                 prev_topic = TOPIC_ORDER[current_index - 1]
-                session["current_topic"] = prev_topic
-                prev_topic_data = TOPICS[prev_topic]
-                session["current_question_index"] = len(prev_topic_data["content"]) - 1
-                show_question(user_id, message.chat.id)
+                if prev_topic in TOPICS:
+                    session["current_topic"] = prev_topic
+                    prev_topic_data = TOPICS[prev_topic]
+                    session["current_question_index"] = len(prev_topic_data["content"]) - 1
+                    show_question(user_id, message.chat.id)
+                else:
+                    session["current_topic"] = "start"
+                    session["current_question_index"] = 0
+                    show_question(user_id, message.chat.id)
             else:
                 bot.send_message(message.chat.id, "Вы уже в начале обучения!")
         return
