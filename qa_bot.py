@@ -115,7 +115,7 @@ def search_in_knowledge_base(query):
     # Возвращаем топ результатов
     return results[:config.SEARCH_CONFIG['max_results']]
 
-def create_keyboard(with_start=False, with_back=False, with_prev=False, with_next=False, with_home=False, with_cancel=False):
+def create_keyboard(with_start=False, with_back=False, with_prev=False, with_next=False, with_home=False, with_cancel=False, with_commands=False):
     """Создаем клавиатуру с нужными кнопками"""
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     buttons = []
@@ -132,6 +132,9 @@ def create_keyboard(with_start=False, with_back=False, with_prev=False, with_nex
         buttons.append("На главную 🏠")
     if with_cancel:
         buttons.append("Задать вопрос ❓")
+    if with_commands:
+        buttons.append("📋 Команды")
+        buttons.append("📖 Список тем")
 
     markup.add(*buttons)
     return markup
@@ -175,7 +178,8 @@ def show_question(user_id, chat_id):
         with_prev=not is_first_question,
         with_next=(is_last_question and not is_last_topic) or has_welcome,
         with_home=not is_first_topic,
-        with_cancel=True
+        with_cancel=True,
+        with_commands=is_first_topic  # Показываем команды только на старте
     )
 
     # Отправляем ответ (возможно, с задержкой для эффекта "печатает")
@@ -455,6 +459,16 @@ def ask_question_prompt(message):
         reply_markup=create_keyboard(with_home=True)
     )
 
+@bot.message_handler(func=lambda message: message.text == "📋 Команды")
+def show_commands_button(message):
+    """Показать команды при нажатии кнопки"""
+    send_help(message)
+
+@bot.message_handler(func=lambda message: message.text == "📖 Список тем")
+def show_topics_button(message):
+    """Показать темы при нажатии кнопки"""
+    send_topics(message)
+
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
     """Обработчик текстовых сообщений (для произвольных вопросов)"""
@@ -462,7 +476,7 @@ def handle_text(message):
 
     # Если пользователь просто нажал на кнопку, она уже обработана выше
     button_texts = ["Старт 🚀", "На главную 🏠", "Назад ◀️", "Предыдущий вопрос ↩️", 
-                    "Следующая тема ➡️", "Задать вопрос ❓"]
+                    "Следующая тема ➡️", "Задать вопрос ❓", "📋 Команды", "📖 Список тем"]
     if message.text in button_texts:
         return
 
