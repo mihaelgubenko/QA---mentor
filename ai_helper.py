@@ -37,24 +37,30 @@ def ask_ai(question: str) -> Optional[str]:
         # Получаем модель из конфига
         model = config.OPENAI_MODEL.strip() if config.OPENAI_MODEL else 'gpt-3.5-turbo'
         
-        # Список известных поддерживаемых моделей OpenAI
-        known_models = [
-            'gpt-3.5-turbo', 'gpt-3.5-turbo-16k',
-            'gpt-4', 'gpt-4-turbo', 'gpt-4-turbo-preview',
-            'gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4o-2024-08-06',
-            'gpt-4o-mini', 'gpt-4o-mini-2024-07-18',
-            'o1', 'o1-mini', 'o1-preview', 'o1-2024-12-17',
-            'gpt-5-mini', 'gpt-5 mini'  # На случай если такая модель появится
+        # Список разрешённых моделей:
+        # - одна линейка 3.5
+        # - все актуальные модели семейства gpt-4*
+        allowed_models = [
+            'gpt-3.5-turbo',
+            'gpt-4',
+            'gpt-4-turbo',
+            'gpt-4-turbo-preview',
+            'gpt-4o',
+            'gpt-4o-2024-05-13',
+            'gpt-4o-2024-08-06',
+            'gpt-4o-mini',
+            'gpt-4o-mini-2024-07-18',
         ]
         
-        # Если модель не указана, используем gpt-3.5-turbo
+        # Нормализуем имя модели
         if not model:
             model = 'gpt-3.5-turbo'
             print(f"[INFO] Модель не указана, используется по умолчанию: {model}")
-        # Если модель не в списке известных, все равно пробуем использовать её
-        # (API вернет ошибку если модель не существует)
-        elif model.lower() not in [m.lower() for m in known_models]:
-            print(f"[INFO] Используется модель '{model}' (не в списке известных, но попробуем)")
+        elif model.lower() not in [m.lower() for m in allowed_models]:
+            # Жёсткий fallback: если указана любая другая модель,
+            # всегда используем gpt-3.5-turbo
+            print(f"[WARNING] Модель '{model}' не разрешена. Используется gpt-3.5-turbo.")
+            model = 'gpt-3.5-turbo'
         
         response = client.chat.completions.create(
             model=model,
