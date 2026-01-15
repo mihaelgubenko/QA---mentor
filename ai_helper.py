@@ -3,6 +3,7 @@
 """
 import config
 import openai
+from openai import APIError
 from typing import Optional
 
 # Инициализация OpenAI клиента
@@ -33,8 +34,15 @@ def ask_ai(question: str) -> Optional[str]:
 Отвечай кратко, структурированно, с примерами когда это уместно.
 Если вопрос не связан с тестированием, вежливо укажи на это."""
         
+        # Проверяем и исправляем имя модели
+        model = config.OPENAI_MODEL
+        # Если модель не указана или неверная, используем gpt-3.5-turbo
+        if not model or model not in ['gpt-3.5-turbo', 'gpt-4', 'gpt-4-turbo', 'gpt-4o', 'gpt-4o-mini']:
+            model = 'gpt-3.5-turbo'
+            print(f"[WARNING] Используется модель по умолчанию: {model}")
+        
         response = client.chat.completions.create(
-            model=config.OPENAI_MODEL,
+            model=model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": question}
@@ -46,6 +54,9 @@ def ask_ai(question: str) -> Optional[str]:
         answer = response.choices[0].message.content.strip()
         return answer
         
+    except APIError as e:
+        print(f"[ERROR] OpenAI API ошибка: {e}")
+        return None
     except Exception as e:
         print(f"[ERROR] Ошибка при запросе к AI: {e}")
         return None

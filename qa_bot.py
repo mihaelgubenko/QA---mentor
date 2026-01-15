@@ -50,27 +50,48 @@ def calculate_relevance_score(query_words, question_data, topic_name):
     keywords = question_data.get("keywords", [])
     topic_text = normalize_text(topic_name)
     
+    # Проверка на точное совпадение фразы (высокий приоритет)
+    query_phrase = ' '.join(query_words)
+    query_phrase_2 = ' '.join(query_words[:2]) if len(query_words) >= 2 else ""
+    query_phrase_3 = ' '.join(query_words[:3]) if len(query_words) >= 3 else ""
+    
+    # Очень высокий бонус за точное совпадение фразы в вопросе
+    if query_phrase in question_text:
+        score += 20.0
+    elif query_phrase_3 and query_phrase_3 in question_text:
+        score += 15.0
+    elif query_phrase_2 and query_phrase_2 in question_text:
+        score += 12.0
+    
+    # Высокий бонус за точное совпадение фразы в ответе
+    if query_phrase in answer_text:
+        score += 10.0
+    elif query_phrase_3 and query_phrase_3 in answer_text:
+        score += 7.0
+    elif query_phrase_2 and query_phrase_2 in answer_text:
+        score += 5.0
+    
     # Расширяем запрос синонимами
     expanded_query = expand_with_synonyms(query_words)
     
-    # Подсчет совпадений
+    # Подсчет совпадений отдельных слов
     for word in expanded_query:
-        # Совпадение в вопросе - высокий вес
+        # Совпадение в вопросе - очень высокий вес
         if word in question_text:
-            score += 3.0
-        # Совпадение в keywords - очень высокий вес
-        if word in [normalize_text(kw) for kw in keywords]:
             score += 5.0
+        # Совпадение в keywords - максимальный вес
+        if word in [normalize_text(kw) for kw in keywords]:
+            score += 8.0
         # Совпадение в ответе - средний вес
         if word in answer_text:
-            score += 1.0
+            score += 2.0
         # Совпадение в названии темы - средний вес
         if word in topic_text:
-            score += 2.0
+            score += 3.0
     
-    # Бонус за точное совпадение фразы
-    query_phrase = ' '.join(query_words)
-    if query_phrase in question_text or query_phrase in answer_text:
+    # Бонус если все слова запроса найдены в вопросе
+    words_in_question = sum(1 for word in query_words if word in question_text)
+    if words_in_question == len(query_words) and len(query_words) > 0:
         score += 10.0
     
     return score
@@ -711,13 +732,25 @@ if __name__ == "__main__":
         print()
         print("Бот остановлен пользователем.")
     except Exception as e:
-        print()
-        print(f"[ОШИБКА] Бот остановлен из-за ошибки!")
-        print(f"Детали: {type(e).__name__}: {e}")
-        print()
-        print("Проверьте:")
-        print("1. Правильность токена в .env файле")
-        print("2. Подключение к интернету")
-        print("3. Доступность Telegram API")
-        print("4. Не заблокирован ли Telegram в вашей стране/сети")
+        error_str = str(e)
+        if "409" in error_str or "Conflict" in error_str:
+            print()
+            print("[ОШИБКА] Конфликт: запущено несколько экземпляров бота!")
+            print("Детали: Conflict: terminated by other getUpdates request")
+            print()
+            print("Решение:")
+            print("1. Убедитесь, что бот не запущен локально")
+            print("2. Проверьте, что на Railway запущен только один экземпляр")
+            print("3. Подождите 10-20 секунд и перезапустите бота")
+            print("4. Если проблема сохраняется, остановите все экземпляры и запустите заново")
+        else:
+            print()
+            print(f"[ОШИБКА] Бот остановлен из-за ошибки!")
+            print(f"Детали: {type(e).__name__}: {e}")
+            print()
+            print("Проверьте:")
+            print("1. Правильность токена в .env файле")
+            print("2. Подключение к интернету")
+            print("3. Доступность Telegram API")
+            print("4. Не заблокирован ли Telegram в вашей стране/сети")
         exit(1)
