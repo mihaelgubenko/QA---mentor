@@ -3,6 +3,7 @@ from telebot import types
 from telebot.apihelper import ApiTelegramException
 import config
 import re
+import difflib
 from knowledge_base import TOPICS, TOPIC_ORDER, SYNONYMS
 import security
 import ai_helper
@@ -13,6 +14,24 @@ bot = telebot.TeleBot(config.BOT_TOKEN)
 # Словарь для хранения состояния пользователей
 # Формат: {user_id: {"current_topic": "start", "current_question_index": 0}}
 user_sessions = {}
+
+# Стоп-слова для фильтрации шумных запросов
+STOPWORDS = {
+    # Русский
+    "и", "а", "но", "да", "или", "ли", "не", "на", "в", "во", "по", "про", "о", "об", "от", "до",
+    "из", "у", "к", "для", "как", "что", "такое", "это", "этот", "эта", "эти", "тут", "там", "мы",
+    "вы", "ты", "он", "она", "они", "есть", "бы", "же", "ну", "все", "всё", "еще", "ещё", "уже",
+    "с", "со", "без", "при", "над", "под", "после", "перед", "через", "можно", "нужно", "надо",
+    "давай", "поговорим", "расскажи", "опиши", "объясни", "почему", "когда", "где", "сколько",
+    "какой", "какая", "какие", "номер", "тема", "темы", "пожалуйста", "скажи", "просто",
+    # English
+    "the", "a", "an", "and", "or", "to", "of", "in", "on", "for", "with", "about", "is", "are",
+    "what", "how", "why", "when", "where", "please", "tell", "me"
+}
+
+MIN_QUERY_WORD_LENGTH = 2
+PREFIX_MATCH_MIN_LENGTH = 4
+FUZZY_MATCH_THRESHOLD = 0.88
 
 def send_message_safe(chat_id, text, parse_mode=None, reply_markup=None):
     """Отправляет сообщение и защищает от ошибок Markdown."""
@@ -62,6 +81,40 @@ def normalize_text(text):
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
+def filter_query_words(words):
+    """Фильтрует шумные и короткие слова в запросе"""
+    filtered = []
+    for word in words:
+        if not word:
+            continue
+        for token in str(word).split():
+            if len(token) < MIN_QUERY_WORD_LENGTH:
+                continue
+            if token in STOPWORDS:
+                continue
+            filtered.append(token)
+    return filtered
+
+def tokenize_text(text):
+    """Нормализует текст и возвращает список значимых слов"""
+    normalized = normalize_text(text)
+    return filter_query_words(normalized.split())
+
+def is_word_match(word, target_word):
+    """Сравнивает слова с учетом склонений и опечаток"""
+    if word == target_word:
+        return True
+    if len(word) >= PREFIX_MATCH_MIN_LENGTH and len(target_word) >= PREFIX_MATCH_MIN_LENGTH:
+        if word.startswith(target_word) or target_word.startswith(word):
+            return True
+    if len(word) >= 5 and len(target_word) >= 5:
+        ratio = difflib.SequenceMatcher(None, word, target_word).ratio()
+        return ratio >= FUZZY_MATCH_THRESHOLD
+    return False
+
+def has_word_match(word, target_words):
+    return any(is_word_match(word, target_word) for target_word in target_words)
+
 def expand_with_synonyms(words):
     """Расширяет список слов синонимами"""
     expanded = set(words)
@@ -70,59 +123,63 @@ def expand_with_synonyms(words):
             expanded.update(SYNONYMS[word])
     return expanded
 
-def calculate_relevance_score(query_words, question_data, topic_name):
+def calculate_relevance_score(query_words, question_data, topic_name, base_query_words=None):
     """Вычисляет релевантность вопроса запросу пользователя"""
     score = 0.0
     
-    # Получаем текст для поиска
+    filtered_query_words = filter_query_words(query_words)
+    filtered_base_words = filter_query_words(base_query_words or query_words)
+    
+    if not filtered_query_words:
+        return 0.0
+    
+    # Получаем текст и слова для поиска
     question_text = normalize_text(question_data.get("question", ""))
     answer_text = normalize_text(question_data.get("answer", ""))
     keywords = question_data.get("keywords", [])
-    topic_text = normalize_text(topic_name)
+    question_words = tokenize_text(question_data.get("question", ""))
+    answer_words = tokenize_text(question_data.get("answer", ""))
+    topic_words = tokenize_text(topic_name)
+    keyword_words = []
+    for keyword in keywords:
+        keyword_words.extend(tokenize_text(keyword))
     
-    # Проверка на точное совпадение фразы (высокий приоритет)
-    query_phrase = ' '.join(query_words)
-    query_phrase_2 = ' '.join(query_words[:2]) if len(query_words) >= 2 else ""
-    query_phrase_3 = ' '.join(query_words[:3]) if len(query_words) >= 3 else ""
-    
-    # Очень высокий бонус за точное совпадение фразы в вопросе
-    if query_phrase in question_text:
-        score += 20.0
-    elif query_phrase_3 and query_phrase_3 in question_text:
-        score += 15.0
-    elif query_phrase_2 and query_phrase_2 in question_text:
-        score += 12.0
-    
-    # Высокий бонус за точное совпадение фразы в ответе
-    if query_phrase in answer_text:
-        score += 10.0
-    elif query_phrase_3 and query_phrase_3 in answer_text:
-        score += 7.0
-    elif query_phrase_2 and query_phrase_2 in answer_text:
-        score += 5.0
-    
-    # Расширяем запрос синонимами
-    expanded_query = expand_with_synonyms(query_words)
+    # Проверка на совпадение фразы (только для осмысленных запросов)
+    if len(filtered_base_words) >= 2:
+        query_phrase = ' '.join(filtered_base_words)
+        query_phrase_2 = ' '.join(filtered_base_words[:2])
+        query_phrase_3 = ' '.join(filtered_base_words[:3]) if len(filtered_base_words) >= 3 else ""
+        
+        if query_phrase and query_phrase in question_text:
+            score += 20.0
+        elif query_phrase_3 and query_phrase_3 in question_text:
+            score += 15.0
+        elif query_phrase_2 and query_phrase_2 in question_text:
+            score += 12.0
+        
+        if query_phrase and query_phrase in answer_text:
+            score += 10.0
+        elif query_phrase_3 and query_phrase_3 in answer_text:
+            score += 7.0
+        elif query_phrase_2 and query_phrase_2 in answer_text:
+            score += 5.0
     
     # Подсчет совпадений отдельных слов
-    for word in expanded_query:
-        # Совпадение в вопросе - очень высокий вес
-        if word in question_text:
+    for word in filtered_query_words:
+        if has_word_match(word, question_words):
             score += 5.0
-        # Совпадение в keywords - максимальный вес
-        if word in [normalize_text(kw) for kw in keywords]:
+        if has_word_match(word, keyword_words):
             score += 8.0
-        # Совпадение в ответе - средний вес
-        if word in answer_text:
+        if has_word_match(word, answer_words):
             score += 2.0
-        # Совпадение в названии темы - средний вес
-        if word in topic_text:
+        if has_word_match(word, topic_words):
             score += 3.0
     
-    # Бонус если все слова запроса найдены в вопросе
-    words_in_question = sum(1 for word in query_words if word in question_text)
-    if words_in_question == len(query_words) and len(query_words) > 0:
-        score += 10.0
+    # Бонус если все ключевые слова запроса найдены в вопросе
+    if len(filtered_base_words) >= 2:
+        words_in_question = sum(1 for word in filtered_base_words if has_word_match(word, question_words))
+        if words_in_question == len(filtered_base_words):
+            score += 10.0
     
     return score
 
@@ -133,13 +190,20 @@ def search_in_knowledge_base(query):
     
     # Нормализуем запрос
     normalized_query = normalize_text(query)
-    query_words = normalized_query.split()
+    query_words = filter_query_words(normalized_query.split())
     
     if not query_words:
         return []
     
     # Расширяем запрос синонимами
-    expanded_query = expand_with_synonyms(query_words)
+    if config.SEARCH_CONFIG.get('use_synonyms', True):
+        expanded_query = expand_with_synonyms(query_words)
+    else:
+        expanded_query = set(query_words)
+    expanded_query_words = filter_query_words(expanded_query)
+    
+    if not expanded_query_words:
+        return []
     
     results = []
     
@@ -148,7 +212,12 @@ def search_in_knowledge_base(query):
         topic_name = topic_data.get("name", "")
         
         for question_data in topic_data.get("content", []):
-            score = calculate_relevance_score(query_words, question_data, topic_name)
+            score = calculate_relevance_score(
+                expanded_query_words,
+                question_data,
+                topic_name,
+                base_query_words=query_words
+            )
             
             if score >= config.SEARCH_CONFIG['min_relevance_score']:
                 results.append({
