@@ -189,7 +189,9 @@ def check_relevance(user_question: str, found_question: str, found_answer: str) 
         return None
     
     if not config.SEARCH_CONFIG.get('use_ai_relevance_check', False):
-        return True  # Если проверка отключена, считаем релевантным
+        # Если проверка отключена, возвращаем None - пусть основная логика решает
+        # Это позволит использовать AI fallback для средних score
+        return None
     
     try:
         # Получаем и валидируем модель

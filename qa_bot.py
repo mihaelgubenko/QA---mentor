@@ -261,16 +261,44 @@ def process_search_results(chat_id, query, results, is_search=False):
     result = results[0]
     score = result['score']
     
-    # Если очень высокий score - показываем сразу
+    # Если очень высокий score - проверяем релевантность через AI (если доступен)
+    # Это важно, чтобы не показывать нерелевантные результаты даже с высоким score
     if score >= config.SEARCH_CONFIG['high_relevance_score']:
-        response = format_response_from_db(result)
-        bot.send_message(
-            chat_id,
-            response,
-            parse_mode="Markdown",
-            reply_markup=create_keyboard(with_home=True)
+        # Проверяем релевантность через AI, если он доступен
+        is_relevant = ai_helper.check_relevance(
+            query,
+            result['question'],
+            result['answer']
         )
-        return
+        
+        # Если AI недоступен (None) - для высокого score показываем результат
+        # (высокий score обычно означает хорошее совпадение)
+        if is_relevant is None:
+            response = format_response_from_db(result)
+            bot.send_message(
+                chat_id,
+                response,
+                parse_mode="Markdown",
+                reply_markup=create_keyboard(with_home=True)
+            )
+            return
+        
+        # Если AI считает нерелевантным (False) - используем AI fallback
+        if is_relevant is False:
+            if not send_ai_response(chat_id, query):
+                send_not_found_message(chat_id, query=query, is_search=is_search)
+            return
+        
+        # AI подтвердил релевантность (True) - показываем ответ из базы
+        if is_relevant is True:
+            response = format_response_from_db(result)
+            bot.send_message(
+                chat_id,
+                response,
+                parse_mode="Markdown",
+                reply_markup=create_keyboard(with_home=True)
+            )
+            return
     
     # Если средний score - проверяем релевантность через AI
     if score >= config.SEARCH_CONFIG['min_relevance_score']:
@@ -280,20 +308,25 @@ def process_search_results(chat_id, query, results, is_search=False):
             result['answer']
         )
         
-        # Если AI недоступен (None) или считает нерелевантным (False) - используем AI fallback
-        if is_relevant is None or not is_relevant:
+        # Если AI считает нерелевантным (False) - всегда используем AI fallback
+        if is_relevant is False:
+            # AI явно сказал, что нерелевантно - используем AI fallback
             if not send_ai_response(chat_id, query):
-                # AI не настроен - показываем найденный ответ (лучше чем ничего)
-                response = format_response_from_db(result)
-                bot.send_message(
-                    chat_id,
-                    response,
-                    parse_mode="Markdown",
-                    reply_markup=create_keyboard(with_home=True)
-                )
+                # AI не настроен - показываем сообщение "не найдено"
+                send_not_found_message(chat_id, query=query, is_search=is_search)
             return
-        else:
-            # AI подтвердил релевантность - показываем ответ из базы
+        
+        # Если AI недоступен (None) - для среднего score лучше использовать AI fallback
+        if is_relevant is None:
+            # AI недоступен для проверки - используем AI fallback для ответа
+            if not send_ai_response(chat_id, query):
+                # AI не настроен - для среднего score лучше показать "не найдено", 
+                # чем показывать потенциально нерелевантный ответ
+                send_not_found_message(chat_id, query=query, is_search=is_search)
+            return
+        
+        # AI подтвердил релевантность (True) - показываем ответ из базы
+        if is_relevant is True:
             response = format_response_from_db(result)
             bot.send_message(
                 chat_id,
