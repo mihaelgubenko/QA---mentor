@@ -6,6 +6,21 @@ import openai
 from openai import APIError
 from typing import Optional
 
+# Список разрешённых моделей:
+# - одна линейка 3.5
+# - все актуальные модели семейства gpt-4*
+ALLOWED_MODELS = [
+    'gpt-3.5-turbo',
+    'gpt-4',
+    'gpt-4-turbo',
+    'gpt-4-turbo-preview',
+    'gpt-4o',
+    'gpt-4o-2024-05-13',
+    'gpt-4o-2024-08-06',
+    'gpt-4o-mini',
+    'gpt-4o-mini-2024-07-18',
+]
+
 # Инициализация OpenAI клиента
 client = None
 if config.AI_CONFIG['enabled']:
@@ -14,6 +29,19 @@ if config.AI_CONFIG['enabled']:
     except Exception as e:
         print(f"[WARNING] OpenAI не инициализирован: {e}")
         client = None
+
+def validate_model(model_name: str) -> str:
+    """Валидирует и нормализует имя модели"""
+    if not model_name:
+        return 'gpt-3.5-turbo'
+    
+    model = model_name.strip()
+    
+    if model.lower() not in [m.lower() for m in ALLOWED_MODELS]:
+        print(f"[WARNING] Модель '{model}' не разрешена. Используется gpt-3.5-turbo.")
+        return 'gpt-3.5-turbo'
+    
+    return model
 
 def ask_ai(question: str) -> Optional[str]:
     """
@@ -34,33 +62,8 @@ def ask_ai(question: str) -> Optional[str]:
 Отвечай кратко, структурированно, с примерами когда это уместно.
 Если вопрос не связан с тестированием, вежливо укажи на это."""
         
-        # Получаем модель из конфига
-        model = config.OPENAI_MODEL.strip() if config.OPENAI_MODEL else 'gpt-3.5-turbo'
-        
-        # Список разрешённых моделей:
-        # - одна линейка 3.5
-        # - все актуальные модели семейства gpt-4*
-        allowed_models = [
-            'gpt-3.5-turbo',
-            'gpt-4',
-            'gpt-4-turbo',
-            'gpt-4-turbo-preview',
-            'gpt-4o',
-            'gpt-4o-2024-05-13',
-            'gpt-4o-2024-08-06',
-            'gpt-4o-mini',
-            'gpt-4o-mini-2024-07-18',
-        ]
-        
-        # Нормализуем имя модели
-        if not model:
-            model = 'gpt-3.5-turbo'
-            print(f"[INFO] Модель не указана, используется по умолчанию: {model}")
-        elif model.lower() not in [m.lower() for m in allowed_models]:
-            # Жёсткий fallback: если указана любая другая модель,
-            # всегда используем gpt-3.5-turbo
-            print(f"[WARNING] Модель '{model}' не разрешена. Используется gpt-3.5-turbo.")
-            model = 'gpt-3.5-turbo'
+        # Получаем и валидируем модель из конфига
+        model = validate_model(config.OPENAI_MODEL)
         
         response = client.chat.completions.create(
             model=model,
@@ -95,23 +98,15 @@ def check_relevance(user_question: str, found_question: str, found_answer: str) 
         True если релевантен, False если нет
     """
     if not config.AI_CONFIG['enabled'] or not client:
-        return True  # Если AI не доступен, считаем релевантным
+        # Если AI не доступен, возвращаем None - это сигнал использовать AI fallback
+        return None
     
     if not config.SEARCH_CONFIG.get('use_ai_relevance_check', False):
         return True  # Если проверка отключена, считаем релевантным
     
     try:
-        # Получаем модель
-        model = config.OPENAI_MODEL.strip() if config.OPENAI_MODEL else 'gpt-3.5-turbo'
-        allowed_models = [
-            'gpt-3.5-turbo',
-            'gpt-4', 'gpt-4-turbo', 'gpt-4-turbo-preview',
-            'gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4o-2024-08-06',
-            'gpt-4o-mini', 'gpt-4o-mini-2024-07-18',
-        ]
-        
-        if model.lower() not in [m.lower() for m in allowed_models]:
-            model = 'gpt-3.5-turbo'
+        # Получаем и валидируем модель
+        model = validate_model(config.OPENAI_MODEL)
         
         prompt = f"""Ты эксперт по тестированию ПО. Оцени, релевантен ли найденный ответ вопросу пользователя.
 
@@ -138,4 +133,5 @@ def check_relevance(user_question: str, found_question: str, found_answer: str) 
         
     except Exception as e:
         print(f"[WARNING] Ошибка при проверке релевантности через AI: {e}")
-        return True  # В случае ошибки считаем релевантным
+        # В случае ошибки возвращаем None - это сигнал использовать AI fallback
+        return None

@@ -160,6 +160,148 @@ def create_keyboard(with_start=False, with_back=False, with_prev=False, with_nex
     markup.add(*buttons)
     return markup
 
+# Константы для сообщений
+NOT_FOUND_MESSAGE = """😔 Я не нашел точного ответа на твой вопрос.
+
+*Попробуй:*
+• Переформулировать вопрос другими словами
+• Использовать /topics для просмотра всех тем
+• Изучать темы по порядку через навигацию"""
+
+SEARCH_NOT_FOUND_MESSAGE = """Попробуй:
+• Использовать другие слова
+• Проверить правописание
+• Использовать /topics для просмотра всех тем"""
+
+def format_response_from_db(result):
+    """Форматирует ответ из базы знаний"""
+    response = f"*{result['topic_name']}*\n\n"
+    response += f"*{result['question']}*\n\n"
+    response += result['answer']
+    
+    if len(response) > 4000:
+        response = response[:4000] + "\n\n... (сообщение обрезано)"
+    
+    return response
+
+def send_ai_response(chat_id, question):
+    """Отправляет ответ от AI, если он доступен"""
+    if not config.AI_CONFIG['enabled'] or not config.AI_CONFIG['use_fallback']:
+        return False
+    
+    bot.send_chat_action(chat_id, 'typing')
+    ai_response = ai_helper.ask_ai(question)
+    
+    if ai_response:
+        response = f"🤖 *Ответ от AI:*\n\n{ai_response}\n\n"
+        response += "💡 *Совет:* Используй /topics для изучения структурированных тем."
+        
+        if len(response) > 4000:
+            response = response[:4000] + "\n\n... (сообщение обрезано)"
+        
+        bot.send_message(
+            chat_id,
+            response,
+            parse_mode="Markdown",
+            reply_markup=create_keyboard(with_home=True)
+        )
+        return True
+    
+    return False
+
+def send_not_found_message(chat_id, query=None, is_search=False):
+    """Отправляет сообщение о том, что ничего не найдено"""
+    if is_search and query:
+        safe_query = security.escape_markdown(query)
+        message = f"😔 По запросу '*{safe_query}*' ничего не найдено.\n\n{SEARCH_NOT_FOUND_MESSAGE}"
+    elif is_search:
+        message = f"😔 По запросу ничего не найдено.\n\n{SEARCH_NOT_FOUND_MESSAGE}"
+    else:
+        message = NOT_FOUND_MESSAGE
+    
+    bot.send_message(
+        chat_id,
+        message,
+        parse_mode="Markdown",
+        reply_markup=create_keyboard(with_home=True) if not is_search else None
+    )
+
+def validate_and_sanitize_input(raw_input, max_length=None, is_search=False):
+    """Валидирует и очищает пользовательский ввод"""
+    if not max_length:
+        max_length = config.SECURITY_CONFIG['max_search_length'] if is_search else config.SECURITY_CONFIG['max_query_length']
+    
+    if config.SECURITY_CONFIG['enable_input_sanitization']:
+        sanitized, is_valid, error_msg = security.sanitize_input(
+            raw_input,
+            max_length=max_length,
+            check_injection=config.SECURITY_CONFIG['enable_prompt_injection_detection']
+        )
+        
+        if not is_valid:
+            return None, False, error_msg
+        
+        return sanitized, True, None
+    else:
+        return raw_input, True, None
+
+def process_search_results(chat_id, query, results, is_search=False):
+    """Обрабатывает результаты поиска и отправляет ответ"""
+    if not results:
+        # Ничего не найдено - используем AI
+        if not send_ai_response(chat_id, query):
+            send_not_found_message(chat_id, query=query, is_search=is_search)
+        return
+    
+    result = results[0]
+    score = result['score']
+    
+    # Если очень высокий score - показываем сразу
+    if score >= config.SEARCH_CONFIG['high_relevance_score']:
+        response = format_response_from_db(result)
+        bot.send_message(
+            chat_id,
+            response,
+            parse_mode="Markdown",
+            reply_markup=create_keyboard(with_home=True)
+        )
+        return
+    
+    # Если средний score - проверяем релевантность через AI
+    if score >= config.SEARCH_CONFIG['min_relevance_score']:
+        is_relevant = ai_helper.check_relevance(
+            query,
+            result['question'],
+            result['answer']
+        )
+        
+        # Если AI недоступен (None) или считает нерелевантным (False) - используем AI fallback
+        if is_relevant is None or not is_relevant:
+            if not send_ai_response(chat_id, query):
+                # AI не настроен - показываем найденный ответ (лучше чем ничего)
+                response = format_response_from_db(result)
+                bot.send_message(
+                    chat_id,
+                    response,
+                    parse_mode="Markdown",
+                    reply_markup=create_keyboard(with_home=True)
+                )
+            return
+        else:
+            # AI подтвердил релевантность - показываем ответ из базы
+            response = format_response_from_db(result)
+            bot.send_message(
+                chat_id,
+                response,
+                parse_mode="Markdown",
+                reply_markup=create_keyboard(with_home=True)
+            )
+            return
+    
+    # Score слишком низкий (< 5.0) - используем AI
+    if not send_ai_response(chat_id, query):
+        send_not_found_message(chat_id, query=query, is_search=is_search)
+
 def show_question(user_id, chat_id):
     """Показываем текущий вопрос пользователю"""
     session = get_user_session(user_id)
@@ -335,125 +477,22 @@ def handle_search(message):
         return
     
     # Валидация и очистка запроса
-    if config.SECURITY_CONFIG['enable_input_sanitization']:
-        query, is_valid, error_msg = security.sanitize_input(
-            raw_query,
-            max_length=config.SECURITY_CONFIG['max_search_length'],
-            check_injection=config.SECURITY_CONFIG['enable_prompt_injection_detection']
-        )
-        
-        if not is_valid:
-            bot.send_message(
-                message.chat.id,
-                f"⚠️ {error_msg}\n\n"
-                "Пожалуйста, переформулируй запрос.",
-                parse_mode="Markdown"
-            )
-            return
-    else:
-        query = raw_query
+    query, is_valid, error_msg = validate_and_sanitize_input(raw_query, is_search=True)
     
-    bot.send_chat_action(message.chat.id, 'typing')
-    
-    # Выполняем поиск
-    results = search_in_knowledge_base(query)
-    
-    if not results:
-        # Безопасно экранируем запрос для отображения
-        safe_query = security.escape_markdown(query)
+    if not is_valid:
         bot.send_message(
             message.chat.id,
-            f"😔 По запросу '*{safe_query}*' ничего не найдено.\n\n"
-            "Попробуй:\n"
-            "• Использовать другие слова\n"
-            "• Проверить правописание\n"
-            "• Использовать /topics для просмотра всех тем",
+            f"⚠️ {error_msg}\n\n"
+            "Пожалуйста, переформулируй запрос.",
             parse_mode="Markdown"
         )
         return
     
-    # Обрабатываем результаты поиска
-    best_result = results[0]
-    score = best_result['score']
+    bot.send_chat_action(message.chat.id, 'typing')
     
-    # Если очень высокий score - показываем сразу
-    if score >= config.SEARCH_CONFIG['high_relevance_score']:
-        response = f"*{best_result['topic_name']}*\n\n"
-        response += f"*{best_result['question']}*\n\n"
-        response += best_result['answer']
-        
-        if len(response) > 4000:
-            response = response[:4000] + "\n\n... (сообщение обрезано)"
-        
-        bot.send_message(
-            message.chat.id,
-            response,
-            parse_mode="Markdown",
-            reply_markup=create_keyboard(with_home=True)
-        )
-        return
-    
-    # Если средний score - проверяем релевантность через AI
-    if score >= config.SEARCH_CONFIG['min_relevance_score']:
-        is_relevant = ai_helper.check_relevance(
-            query,
-            best_result['question'],
-            best_result['answer']
-        )
-        
-        if is_relevant:
-            # AI подтвердил релевантность - показываем ответ
-            response = f"*{best_result['topic_name']}*\n\n"
-            response += f"*{best_result['question']}*\n\n"
-            response += best_result['answer']
-            
-            if len(response) > 4000:
-                response = response[:4000] + "\n\n... (сообщение обрезано)"
-            
-            bot.send_message(
-                message.chat.id,
-                response,
-                parse_mode="Markdown",
-                reply_markup=create_keyboard(with_home=True)
-            )
-        else:
-            # AI считает нерелевантным - используем AI для ответа
-            if config.AI_CONFIG['enabled'] and config.AI_CONFIG['use_fallback']:
-                ai_response = ai_helper.ask_ai(query)
-                
-                if ai_response:
-                    response = f"🤖 *Ответ от AI:*\n\n{ai_response}\n\n"
-                    response += "💡 *Совет:* Используй /topics для изучения структурированных тем."
-                    
-                    if len(response) > 4000:
-                        response = response[:4000] + "\n\n... (сообщение обрезано)"
-                    
-                    bot.send_message(
-                        message.chat.id,
-                        response,
-                        parse_mode="Markdown",
-                        reply_markup=create_keyboard(with_home=True)
-                    )
-                else:
-                    bot.send_message(
-                        message.chat.id,
-                        f"😔 По запросу '*{security.escape_markdown(query)}*' ничего не найдено.\n\n"
-                        "Попробуй:\n"
-                        "• Использовать другие слова\n"
-                        "• Проверить правописание\n"
-                        "• Использовать /topics для просмотра всех тем",
-                        parse_mode="Markdown"
-                    )
-            else:
-                bot.send_message(
-                    message.chat.id,
-                    f"😔 По запросу '*{security.escape_markdown(query)}*' ничего не найдено.\n\n"
-                    "Попробуй:\n"
-                    "• Использовать другие слова\n"
-                    "• Проверить правописание\n"
-                    "• Использовать /topics для просмотра всех тем",
-                    parse_mode="Markdown"
-                )
+    # Выполняем поиск и обрабатываем результаты
+    results = search_in_knowledge_base(query)
+    process_search_results(message.chat.id, query, results, is_search=True)
 
 @bot.message_handler(func=lambda message: message.text == "Старт 🚀")
 def start_over(message):
@@ -601,23 +640,16 @@ def handle_text(message):
 
     # Валидация и очистка пользовательского ввода
     raw_user_text = message.text
-    if config.SECURITY_CONFIG['enable_input_sanitization']:
-        user_text, is_valid, error_msg = security.sanitize_input(
-            raw_user_text,
-            max_length=config.SECURITY_CONFIG['max_query_length'],
-            check_injection=config.SECURITY_CONFIG['enable_prompt_injection_detection']
+    user_text, is_valid, error_msg = validate_and_sanitize_input(raw_user_text)
+    
+    if not is_valid:
+        bot.send_message(
+            message.chat.id,
+            f"⚠️ {error_msg}\n\n"
+            "Пожалуйста, переформулируй вопрос.",
+            parse_mode="Markdown"
         )
-        
-        if not is_valid:
-            bot.send_message(
-                message.chat.id,
-                f"⚠️ {error_msg}\n\n"
-                "Пожалуйста, переформулируй вопрос.",
-                parse_mode="Markdown"
-            )
-            return
-    else:
-        user_text = raw_user_text
+        return
     
     # Ответ на произвольный вопрос пользователя
     bot.send_chat_action(message.chat.id, 'typing')
@@ -641,142 +673,9 @@ def handle_text(message):
         bot.send_message(message.chat.id, "Всегда рад помочь! Удачи в обучении! 💪")
         return
     
-    # Интеллектуальный поиск по базе знаний (используем очищенный текст)
+    # Интеллектуальный поиск по базе знаний и обработка результатов
     results = search_in_knowledge_base(user_text)
-    
-    if results:
-        result = results[0]
-        score = result['score']
-        
-        # Если очень высокий score - показываем сразу
-        if score >= config.SEARCH_CONFIG['high_relevance_score']:
-            response = f"*{result['topic_name']}*\n\n"
-            response += f"*{result['question']}*\n\n"
-            response += result['answer']
-            
-            if len(response) > 4000:
-                response = response[:4000] + "\n\n... (сообщение обрезано)"
-            
-            bot.send_message(
-                message.chat.id,
-                response,
-                parse_mode="Markdown",
-                reply_markup=create_keyboard(with_home=True)
-            )
-        # Если средний score - проверяем релевантность через AI
-        elif score >= config.SEARCH_CONFIG['min_relevance_score']:
-            # Проверяем релевантность через AI
-            is_relevant = ai_helper.check_relevance(
-                user_text,
-                result['question'],
-                result['answer']
-            )
-            
-            if is_relevant:
-                # AI подтвердил релевантность - показываем ответ
-                response = f"*{result['topic_name']}*\n\n"
-                response += f"*{result['question']}*\n\n"
-                response += result['answer']
-                
-                if len(response) > 4000:
-                    response = response[:4000] + "\n\n... (сообщение обрезано)"
-                
-                bot.send_message(
-                    message.chat.id,
-                    response,
-                    parse_mode="Markdown",
-                    reply_markup=create_keyboard(with_home=True)
-                )
-            else:
-                # AI считает нерелевантным - используем AI для ответа
-                if config.AI_CONFIG['enabled'] and config.AI_CONFIG['use_fallback']:
-                    bot.send_chat_action(message.chat.id, 'typing')
-                    ai_response = ai_helper.ask_ai(user_text)
-                    
-                    if ai_response:
-                        response = f"🤖 *Ответ от AI:*\n\n{ai_response}\n\n"
-                        response += "💡 *Совет:* Используй /topics для изучения структурированных тем."
-                        
-                        if len(response) > 4000:
-                            response = response[:4000] + "\n\n... (сообщение обрезано)"
-                        
-                        bot.send_message(
-                            message.chat.id,
-                            response,
-                            parse_mode="Markdown",
-                            reply_markup=create_keyboard(with_home=True)
-                        )
-                    else:
-                        # AI не ответил - стандартное сообщение
-                        bot.send_message(
-                            message.chat.id,
-                            "😔 Я не нашел точного ответа на твой вопрос.\n\n"
-                            "*Попробуй:*\n"
-                            "• Переформулировать вопрос другими словами\n"
-                            "• Использовать /topics для просмотра всех тем\n"
-                            "• Изучать темы по порядку через навигацию",
-                            parse_mode="Markdown",
-                            reply_markup=create_keyboard(with_home=True)
-                        )
-                else:
-                    # AI не настроен
-                    bot.send_message(
-                        message.chat.id,
-                        "😔 Я не нашел точного ответа на твой вопрос.\n\n"
-                        "*Попробуй:*\n"
-                        "• Переформулировать вопрос другими словами\n"
-                        "• Использовать /topics для просмотра всех тем\n"
-                        "• Изучать темы по порядку через навигацию",
-                        parse_mode="Markdown",
-                        reply_markup=create_keyboard(with_home=True)
-                    )
-    else:
-        # Ничего не найдено в базе - обращаемся к AI
-        if config.AI_CONFIG['enabled'] and config.AI_CONFIG['use_fallback']:
-            bot.send_chat_action(message.chat.id, 'typing')
-            
-            # Запрашиваем ответ у AI
-            ai_response = ai_helper.ask_ai(user_text)
-            
-            if ai_response:
-                # Добавляем пометку, что это ответ от AI
-                response = f"🤖 *Ответ от AI:*\n\n{ai_response}\n\n"
-                response += "💡 *Совет:* Используй /topics для изучения структурированных тем."
-                
-                # Обрезаем, если слишком длинно
-                if len(response) > 4000:
-                    response = response[:4000] + "\n\n... (сообщение обрезано)"
-                
-                bot.send_message(
-                    message.chat.id,
-                    response,
-                    parse_mode="Markdown",
-                    reply_markup=create_keyboard(with_home=True)
-                )
-            else:
-                # AI не ответил - показываем стандартное сообщение
-                bot.send_message(
-                    message.chat.id,
-                    "😔 Я не нашел точного ответа на твой вопрос.\n\n"
-                    "*Попробуй:*\n"
-                    "• Переформулировать вопрос другими словами\n"
-                    "• Использовать /topics для просмотра всех тем\n"
-                    "• Изучать темы по порядку через навигацию",
-                    parse_mode="Markdown",
-                    reply_markup=create_keyboard(with_home=True)
-                )
-        else:
-            # AI не настроен - стандартное сообщение
-            bot.send_message(
-                message.chat.id,
-                "😔 Я не нашел точного ответа на твой вопрос.\n\n"
-                "*Попробуй:*\n"
-                "• Переформулировать вопрос другими словами\n"
-                "• Использовать /topics для просмотра всех тем\n"
-                "• Изучать темы по порядку через навигацию",
-                parse_mode="Markdown",
-                reply_markup=create_keyboard(with_home=True)
-            )
+    process_search_results(message.chat.id, user_text, results)
 
 # Запуск бота
 if __name__ == "__main__":
