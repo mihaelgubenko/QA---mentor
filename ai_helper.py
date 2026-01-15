@@ -34,12 +34,27 @@ def ask_ai(question: str) -> Optional[str]:
 Отвечай кратко, структурированно, с примерами когда это уместно.
 Если вопрос не связан с тестированием, вежливо укажи на это."""
         
-        # Проверяем и исправляем имя модели
-        model = config.OPENAI_MODEL
-        # Если модель не указана или неверная, используем gpt-3.5-turbo
-        if not model or model not in ['gpt-3.5-turbo', 'gpt-4', 'gpt-4-turbo', 'gpt-4o', 'gpt-4o-mini']:
+        # Получаем модель из конфига
+        model = config.OPENAI_MODEL.strip() if config.OPENAI_MODEL else 'gpt-3.5-turbo'
+        
+        # Список известных поддерживаемых моделей OpenAI
+        known_models = [
+            'gpt-3.5-turbo', 'gpt-3.5-turbo-16k',
+            'gpt-4', 'gpt-4-turbo', 'gpt-4-turbo-preview',
+            'gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4o-2024-08-06',
+            'gpt-4o-mini', 'gpt-4o-mini-2024-07-18',
+            'o1', 'o1-mini', 'o1-preview', 'o1-2024-12-17',
+            'gpt-5-mini', 'gpt-5 mini'  # На случай если такая модель появится
+        ]
+        
+        # Если модель не указана, используем gpt-3.5-turbo
+        if not model:
             model = 'gpt-3.5-turbo'
-            print(f"[WARNING] Используется модель по умолчанию: {model}")
+            print(f"[INFO] Модель не указана, используется по умолчанию: {model}")
+        # Если модель не в списке известных, все равно пробуем использовать её
+        # (API вернет ошибку если модель не существует)
+        elif model.lower() not in [m.lower() for m in known_models]:
+            print(f"[INFO] Используется модель '{model}' (не в списке известных, но попробуем)")
         
         response = client.chat.completions.create(
             model=model,
