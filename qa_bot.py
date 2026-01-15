@@ -4,7 +4,7 @@ import config
 import re
 from knowledge_base import TOPICS, TOPIC_ORDER, SYNONYMS
 import security
-from ai_helper import ask_ai
+import ai_helper
 
 # Инициализация бота
 bot = telebot.TeleBot(config.BOT_TOKEN)
@@ -372,14 +372,16 @@ def handle_search(message):
         )
         return
     
-    # Если есть очень релевантный результат - показываем только его полностью
+    # Обрабатываем результаты поиска
     best_result = results[0]
-    if best_result['score'] >= config.SEARCH_CONFIG['high_relevance_score']:
+    score = best_result['score']
+    
+    # Если очень высокий score - показываем сразу
+    if score >= config.SEARCH_CONFIG['high_relevance_score']:
         response = f"*{best_result['topic_name']}*\n\n"
         response += f"*{best_result['question']}*\n\n"
         response += best_result['answer']
         
-        # Обрезаем, если слишком длинно
         if len(response) > 4000:
             response = response[:4000] + "\n\n... (сообщение обрезано)"
         
@@ -391,23 +393,67 @@ def handle_search(message):
         )
         return
     
-    # Если несколько результатов, показываем только лучший полностью
-    if len(results) > 0:
-        result = results[0]
-        response = f"*{result['topic_name']}*\n\n"
-        response += f"*{result['question']}*\n\n"
-        response += result['answer']
-        
-        # Обрезаем, если слишком длинно
-        if len(response) > 4000:
-            response = response[:4000] + "\n\n... (сообщение обрезано)"
-        
-        bot.send_message(
-            message.chat.id,
-            response,
-            parse_mode="Markdown",
-            reply_markup=create_keyboard(with_home=True)
+    # Если средний score - проверяем релевантность через AI
+    if score >= config.SEARCH_CONFIG['min_relevance_score']:
+        is_relevant = ai_helper.check_relevance(
+            query,
+            best_result['question'],
+            best_result['answer']
         )
+        
+        if is_relevant:
+            # AI подтвердил релевантность - показываем ответ
+            response = f"*{best_result['topic_name']}*\n\n"
+            response += f"*{best_result['question']}*\n\n"
+            response += best_result['answer']
+            
+            if len(response) > 4000:
+                response = response[:4000] + "\n\n... (сообщение обрезано)"
+            
+            bot.send_message(
+                message.chat.id,
+                response,
+                parse_mode="Markdown",
+                reply_markup=create_keyboard(with_home=True)
+            )
+        else:
+            # AI считает нерелевантным - используем AI для ответа
+            if config.AI_CONFIG['enabled'] and config.AI_CONFIG['use_fallback']:
+                ai_response = ai_helper.ask_ai(query)
+                
+                if ai_response:
+                    response = f"🤖 *Ответ от AI:*\n\n{ai_response}\n\n"
+                    response += "💡 *Совет:* Используй /topics для изучения структурированных тем."
+                    
+                    if len(response) > 4000:
+                        response = response[:4000] + "\n\n... (сообщение обрезано)"
+                    
+                    bot.send_message(
+                        message.chat.id,
+                        response,
+                        parse_mode="Markdown",
+                        reply_markup=create_keyboard(with_home=True)
+                    )
+                else:
+                    bot.send_message(
+                        message.chat.id,
+                        f"😔 По запросу '*{security.escape_markdown(query)}*' ничего не найдено.\n\n"
+                        "Попробуй:\n"
+                        "• Использовать другие слова\n"
+                        "• Проверить правописание\n"
+                        "• Использовать /topics для просмотра всех тем",
+                        parse_mode="Markdown"
+                    )
+            else:
+                bot.send_message(
+                    message.chat.id,
+                    f"😔 По запросу '*{security.escape_markdown(query)}*' ничего не найдено.\n\n"
+                    "Попробуй:\n"
+                    "• Использовать другие слова\n"
+                    "• Проверить правописание\n"
+                    "• Использовать /topics для просмотра всех тем",
+                    parse_mode="Markdown"
+                )
 
 @bot.message_handler(func=lambda message: message.text == "Старт 🚀")
 def start_over(message):
@@ -599,29 +645,98 @@ def handle_text(message):
     results = search_in_knowledge_base(user_text)
     
     if results:
-        # Показываем лучший результат полностью
         result = results[0]
-        response = f"*{result['topic_name']}*\n\n"
-        response += f"*{result['question']}*\n\n"
-        response += result['answer']
+        score = result['score']
         
-        # Обрезаем, если слишком длинно
-        if len(response) > 4000:
-            response = response[:4000] + "\n\n... (сообщение обрезано)"
-        
-        bot.send_message(
-            message.chat.id,
-            response,
-            parse_mode="Markdown",
-            reply_markup=create_keyboard(with_home=True)
-        )
+        # Если очень высокий score - показываем сразу
+        if score >= config.SEARCH_CONFIG['high_relevance_score']:
+            response = f"*{result['topic_name']}*\n\n"
+            response += f"*{result['question']}*\n\n"
+            response += result['answer']
+            
+            if len(response) > 4000:
+                response = response[:4000] + "\n\n... (сообщение обрезано)"
+            
+            bot.send_message(
+                message.chat.id,
+                response,
+                parse_mode="Markdown",
+                reply_markup=create_keyboard(with_home=True)
+            )
+        # Если средний score - проверяем релевантность через AI
+        elif score >= config.SEARCH_CONFIG['min_relevance_score']:
+            # Проверяем релевантность через AI
+            is_relevant = ai_helper.check_relevance(
+                user_text,
+                result['question'],
+                result['answer']
+            )
+            
+            if is_relevant:
+                # AI подтвердил релевантность - показываем ответ
+                response = f"*{result['topic_name']}*\n\n"
+                response += f"*{result['question']}*\n\n"
+                response += result['answer']
+                
+                if len(response) > 4000:
+                    response = response[:4000] + "\n\n... (сообщение обрезано)"
+                
+                bot.send_message(
+                    message.chat.id,
+                    response,
+                    parse_mode="Markdown",
+                    reply_markup=create_keyboard(with_home=True)
+                )
+            else:
+                # AI считает нерелевантным - используем AI для ответа
+                if config.AI_CONFIG['enabled'] and config.AI_CONFIG['use_fallback']:
+                    bot.send_chat_action(message.chat.id, 'typing')
+                    ai_response = ai_helper.ask_ai(user_text)
+                    
+                    if ai_response:
+                        response = f"🤖 *Ответ от AI:*\n\n{ai_response}\n\n"
+                        response += "💡 *Совет:* Используй /topics для изучения структурированных тем."
+                        
+                        if len(response) > 4000:
+                            response = response[:4000] + "\n\n... (сообщение обрезано)"
+                        
+                        bot.send_message(
+                            message.chat.id,
+                            response,
+                            parse_mode="Markdown",
+                            reply_markup=create_keyboard(with_home=True)
+                        )
+                    else:
+                        # AI не ответил - стандартное сообщение
+                        bot.send_message(
+                            message.chat.id,
+                            "😔 Я не нашел точного ответа на твой вопрос.\n\n"
+                            "*Попробуй:*\n"
+                            "• Переформулировать вопрос другими словами\n"
+                            "• Использовать /topics для просмотра всех тем\n"
+                            "• Изучать темы по порядку через навигацию",
+                            parse_mode="Markdown",
+                            reply_markup=create_keyboard(with_home=True)
+                        )
+                else:
+                    # AI не настроен
+                    bot.send_message(
+                        message.chat.id,
+                        "😔 Я не нашел точного ответа на твой вопрос.\n\n"
+                        "*Попробуй:*\n"
+                        "• Переформулировать вопрос другими словами\n"
+                        "• Использовать /topics для просмотра всех тем\n"
+                        "• Изучать темы по порядку через навигацию",
+                        parse_mode="Markdown",
+                        reply_markup=create_keyboard(with_home=True)
+                    )
     else:
         # Ничего не найдено в базе - обращаемся к AI
         if config.AI_CONFIG['enabled'] and config.AI_CONFIG['use_fallback']:
             bot.send_chat_action(message.chat.id, 'typing')
             
             # Запрашиваем ответ у AI
-            ai_response = ask_ai(user_text)
+            ai_response = ai_helper.ask_ai(user_text)
             
             if ai_response:
                 # Добавляем пометку, что это ответ от AI

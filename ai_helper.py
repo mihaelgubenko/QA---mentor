@@ -81,3 +81,61 @@ def ask_ai(question: str) -> Optional[str]:
     except Exception as e:
         print(f"[ERROR] Ошибка при запросе к AI: {e}")
         return None
+
+def check_relevance(user_question: str, found_question: str, found_answer: str) -> bool:
+    """
+    Проверяет через AI, релевантен ли найденный ответ вопросу пользователя
+    
+    Args:
+        user_question: Вопрос пользователя
+        found_question: Найденный вопрос в базе
+        found_answer: Найденный ответ в базе
+        
+    Returns:
+        True если релевантен, False если нет
+    """
+    if not config.AI_CONFIG['enabled'] or not client:
+        return True  # Если AI не доступен, считаем релевантным
+    
+    if not config.SEARCH_CONFIG.get('use_ai_relevance_check', False):
+        return True  # Если проверка отключена, считаем релевантным
+    
+    try:
+        # Получаем модель
+        model = config.OPENAI_MODEL.strip() if config.OPENAI_MODEL else 'gpt-3.5-turbo'
+        allowed_models = [
+            'gpt-3.5-turbo',
+            'gpt-4', 'gpt-4-turbo', 'gpt-4-turbo-preview',
+            'gpt-4o', 'gpt-4o-2024-05-13', 'gpt-4o-2024-08-06',
+            'gpt-4o-mini', 'gpt-4o-mini-2024-07-18',
+        ]
+        
+        if model.lower() not in [m.lower() for m in allowed_models]:
+            model = 'gpt-3.5-turbo'
+        
+        prompt = f"""Ты эксперт по тестированию ПО. Оцени, релевантен ли найденный ответ вопросу пользователя.
+
+Вопрос пользователя: "{user_question}"
+
+Найденный вопрос в базе знаний: "{found_question}"
+
+Ответь ТОЛЬКО одним словом: "ДА" если ответ релевантен и отвечает на вопрос пользователя, "НЕТ" если не релевантен или не отвечает на вопрос."""
+        
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=10,
+            temperature=0.1
+        )
+        
+        answer = response.choices[0].message.content.strip().upper()
+        is_relevant = "ДА" in answer or "YES" in answer or "TRUE" in answer
+        
+        if not is_relevant:
+            print(f"[INFO] AI определил, что ответ не релевантен для вопроса: '{user_question}'")
+        
+        return is_relevant
+        
+    except Exception as e:
+        print(f"[WARNING] Ошибка при проверке релевантности через AI: {e}")
+        return True  # В случае ошибки считаем релевантным
